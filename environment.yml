@@ -1,0 +1,22 @@
+name: italian-lyrics-ml
+channels:
+  - defaults
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.9
+  - pip
+  - pytorch=1.10
+  # - torchvision
+  # - torchaudio
+  # - cudatoolkit=11.3  # Remove this line if you don't have a CUDA-capable GPU
+  - numpy
+  - pandas
+  - matplotlib
+  - jupyterlab
+  - pip:
+    - transformers
+    - datasets
+    - scikit-learn
+    - tqdm
+    - langdetect
