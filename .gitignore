@@ -1,0 +1,28 @@
+# Data files (too large for git)
+/data/
+data/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Model checkpoints
+checkpoints/
+*.pt
+*.pth
+*.bin
+
+# Environment
+.env
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

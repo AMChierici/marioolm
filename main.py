@@ -1,119 +1,106 @@
+"""
+Italian Lyrics ML — Main training and generation script.
+
+This script trains three neural network models on Italian song lyrics
+and generates sample text from each. It serves as a quick way to run
+the full pipeline. For a guided educational experience, see the
+notebooks in the notebooks/ directory.
+
+Usage:
+    python main.py
+"""
+
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from torch.utils.data import DataLoader
+from transformers import GPT2Tokenizer
 
-# Dataset class
-class ItalianLyricsDataset(Dataset):
-    def __init__(self, lyrics, tokenizer, max_length):
-        self.lyrics = lyrics
-        self.tokenizer = tokenizer
-        self.max_length = max_length
+from src.dataset import ItalianLyricsDataset, load_lyrics
+from src.models import RNNModel, LSTMModel, create_transformer_model, model_summary
+from src.training import train_model, get_optimizer
+from src.generation import generate_rnn_lstm, generate_transformer
+from src.visualization import (
+    plot_training_loss,
+    plot_training_time_comparison,
+    display_generation_comparison,
+)
 
-    def __len__(self):
-        return len(self.lyrics)
 
-    def __getitem__(self, idx):
-        lyric = self.lyrics[idx]
-        encoding = self.tokenizer(lyric, truncation=True, padding='max_length', max_length=self.max_length, return_tensors='pt')
-        return encoding['input_ids'].squeeze(), encoding['attention_mask'].squeeze()
-
-# RNN model
-class RNNModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim):
-        super(RNNModel, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.rnn = nn.RNN(embedding_dim, hidden_dim, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, vocab_size)
-
-    def forward(self, x):
-        embedded = self.embedding(x)
-        output, _ = self.rnn(embedded)
-        return self.fc(output)
-
-# LSTM model
-class LSTMModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim):
-        super(LSTMModel, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, vocab_size)
-
-    def forward(self, x):
-        embedded = self.embedding(x)
-        output, _ = self.lstm(embedded)
-        return self.fc(output)
-
-# Function to train models
-def train_model(model, dataloader, criterion, optimizer, device, epochs):
-    model.train()
-    for epoch in range(epochs):
-        total_loss = 0
-        for batch in dataloader:
-            inputs, masks = batch
-            inputs, masks = inputs.to(device), masks.to(device)
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs.view(-1, outputs.size(-1)), inputs.view(-1))
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}")
-
-# Main function
 def main():
-    # Load and preprocess data
-    with open('./data/italian_lyrics.txt', 'r', encoding='utf-8') as f:
-        lyrics = f.readlines()
-    
-    # Initialize tokenizer and models
-    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-    vocab_size = tokenizer.vocab_size
-    embedding_dim = 256
-    hidden_dim = 512
-    max_length = 128
-    batch_size = 32
-    epochs = 5
+    # --- Configuration ---
+    MAX_SONGS = 1000       # Use fewer songs for faster training (None = all)
+    EMBEDDING_DIM = 256
+    HIDDEN_DIM = 512
+    MAX_LENGTH = 128
+    BATCH_SIZE = 32
+    EPOCHS = 3
+    SEED_TEXT = "Amore mio"
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}\n")
 
-    # Create dataset and dataloader
-    dataset = ItalianLyricsDataset(lyrics, tokenizer, max_length)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    # --- Load Data ---
+    print("Loading lyrics...")
+    lyrics = load_lyrics('./data/italian_lyrics.txt', max_songs=MAX_SONGS)
+    print(f"Loaded {len(lyrics)} songs\n")
 
-    # Initialize models
-    rnn_model = RNNModel(vocab_size, embedding_dim, hidden_dim).to(device)
-    lstm_model = LSTMModel(vocab_size, embedding_dim, hidden_dim).to(device)
-    transformer_model = GPT2LMHeadModel.from_pretrained('gpt2').to(device)
+    # --- Initialize Tokenizer ---
+    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    tokenizer.pad_token = tokenizer.eos_token
 
-    # Train models
-    criterion = nn.CrossEntropyLoss()
-    rnn_optimizer = optim.Adam(rnn_model.parameters())
-    lstm_optimizer = optim.Adam(lstm_model.parameters())
-    transformer_optimizer = optim.Adam(transformer_model.parameters())
+    # --- Create Dataset & DataLoader ---
+    dataset = ItalianLyricsDataset(lyrics, tokenizer, MAX_LENGTH)
+    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-    print("Training RNN model...")
-    train_model(rnn_model, dataloader, criterion, rnn_optimizer, device, epochs)
+    # --- Initialize Models ---
+    vocab_size = tokenizer.vocab_size
 
-    print("Training LSTM model...")
-    train_model(lstm_model, dataloader, criterion, lstm_optimizer, device, epochs)
+    rnn_model = RNNModel(vocab_size, EMBEDDING_DIM, HIDDEN_DIM).to(device)
+    lstm_model = LSTMModel(vocab_size, EMBEDDING_DIM, HIDDEN_DIM).to(device)
+    transformer_model = create_transformer_model(tokenizer).to(device)
 
-    print("Training Transformer model...")
-    train_model(transformer_model, dataloader, criterion, transformer_optimizer, device, epochs)
+    print("Model sizes:")
+    model_summary(rnn_model, "RNN")
+    model_summary(lstm_model, "LSTM")
+    model_summary(transformer_model, "Transformer (GPT-2)")
+    print()
 
-    # Generate sample lyrics
-    def generate_lyrics(model, tokenizer, seed_text, max_length=50):
-        model.eval()
-        input_ids = tokenizer.encode(seed_text, return_tensors='pt').to(device)
-        with torch.no_grad():
-            output = model.generate(input_ids, max_length=max_length, num_return_sequences=1, temperature=0.7)
-        return tokenizer.decode(output[0], skip_special_tokens=True)
+    # --- Train All Models ---
+    histories = []
 
-    print("\nGenerating sample lyrics:")
-    seed_text = "Amore mio"
-    print("RNN:", generate_lyrics(rnn_model, tokenizer, seed_text))
-    print("LSTM:", generate_lyrics(lstm_model, tokenizer, seed_text))
-    print("Transformer:", generate_lyrics(transformer_model, tokenizer, seed_text))
+    models_config = [
+        ("RNN", rnn_model, False),
+        ("LSTM", lstm_model, False),
+        ("Transformer", transformer_model, True),
+    ]
+
+    for name, model, is_transformer in models_config:
+        print(f"Training {name}...")
+        optimizer = get_optimizer(model, is_transformer=is_transformer)
+        history = train_model(
+            model, dataloader, optimizer, device, EPOCHS,
+            is_transformer=is_transformer, model_name=name
+        )
+        histories.append(history)
+        print()
+
+    # --- Visualize Training ---
+    print("Generating training plots...")
+    fig1 = plot_training_loss(histories)
+    fig1.savefig('training_loss.png', dpi=100, bbox_inches='tight')
+    fig2 = plot_training_time_comparison(histories)
+    fig2.savefig('training_time.png', dpi=100, bbox_inches='tight')
+    print("Saved: training_loss.png, training_time.png\n")
+
+    # --- Generate Lyrics ---
+    print(f"Generating lyrics from seed: \"{SEED_TEXT}\"\n")
+    results = {
+        'RNN': generate_rnn_lstm(rnn_model, tokenizer, SEED_TEXT),
+        'LSTM': generate_rnn_lstm(lstm_model, tokenizer, SEED_TEXT),
+        'Transformer': generate_transformer(transformer_model, tokenizer, SEED_TEXT),
+    }
+
+    display_generation_comparison(results)
+
 
 if __name__ == "__main__":
     main()
